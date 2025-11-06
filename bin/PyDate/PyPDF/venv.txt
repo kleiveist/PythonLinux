@@ -1,0 +1,6 @@
+# Pakete für das PyPDF-Modul
+pymupdf4llm
+PyPDF2
+rich
+tqdm
+PyMuPDF

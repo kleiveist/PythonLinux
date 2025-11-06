@@ -1,0 +1,2 @@
+# Pakete für das PyPDF-Modul
+Pillow
