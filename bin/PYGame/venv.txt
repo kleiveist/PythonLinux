@@ -1,2 +1,1 @@
 # Pakete für das PyPDF-Modul
-none

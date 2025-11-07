@@ -1,0 +1,6 @@
+# Pakete für das PyPDF-Modul
+psutil
+rich
+distro
+py-cpuinfo
+pyamdgpuinfo
