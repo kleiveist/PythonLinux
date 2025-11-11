@@ -1,5 +1,0 @@
-#!/bin/bash
-set -euo pipefail
-PROJECT_DIR="/home/kleif/Dokumente/Pytohn/P24PyPDF"
-VENV_DIR="$PROJECT_DIR/vmve"
-"$VENV_DIR/bin/python" "$PROJECT_DIR/SRename.py" "$@"
