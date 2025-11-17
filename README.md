@@ -1,3 +1,18 @@
+---
+Cover: '[[README-01.png]]'
+Section: Blobbite
+Rank: Python
+Projekt: PythonLinux
+Task: workspace
+tags:
+- README
+- Blobbite
+- Python
+- PythonLinux
+- workspace
+link1: '[[README]]'
+---
+
 # PythonLinux – Installer & Workspace
 
 Ein leichtgewichtiger Installer, der Python‑Module aus diesem Repository lokal spiegelt, je Modul eine eigene venv anlegt und ausführbare Wrapper bereitstellt. Du kannst das Repo an jeden Ort klonen – der Installer arbeitet immer relativ zu deinem aktuellen Projektordner.

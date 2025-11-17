@@ -1,12 +1,12 @@
 ---
 Cover: '[[PythonLinux-01.png]]'
-Section: MyHub
+Section: Blobbite
 Rank: Python
 Projekt: PythonLinux
 Task: workspace
 tags:
 - PythonLinux
-- MyHub
+- Blobbite
 - Python
 - PythonLinux
 - workspace

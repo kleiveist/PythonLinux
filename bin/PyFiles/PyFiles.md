@@ -1,12 +1,12 @@
 ---
 Cover: '[[PyFiles-01.png]]'
-Section: MyHub
+Section: Blobbite
 Rank: Python
 Projekt: PythonLinux
 Task: bin
 tags:
 - PyFiles
-- MyHub
+- Blobbite
 - Python
 - PythonLinux
 - bin
