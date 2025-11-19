@@ -1,1 +1,4 @@
 # Pakete für das PyPDF-Modul
+pillow
+numpy
+opencv-python
