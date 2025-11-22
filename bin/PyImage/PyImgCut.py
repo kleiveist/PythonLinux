@@ -109,26 +109,37 @@ def process_image(src_path: str, dst_path: str) -> bool:
         return False
 
 
-# =====================================================================================
-# STARTPUNKT
-# =====================================================================================
-if __name__ == "__main__":
-    print_settings()
-
-    input_dir = SETTINGS["paths"]["input_folder"]
-    output_dir = os.path.join(input_dir, SETTINGS["paths"]["output_folder"])
+def run_from_magic(input_dir: str, output_dir: str, silent: bool = False) -> int:
+    """Führt den Zuschnitt für einen Ordner aus (für PyIMagic)."""
+    input_dir = os.path.abspath(input_dir)
+    output_dir = os.path.abspath(output_dir)
     os.makedirs(output_dir, exist_ok=True)
+
+    if not silent:
+        print(f"[Cut] Eingang: {input_dir}")
+        print(f"[Cut] Ausgabe: {output_dir}")
 
     processed = 0
     for filename in os.listdir(input_dir):
         if not filename.lower().endswith(SETTINGS["paths"]["supported_formats"]):
             continue
-
         src = os.path.join(input_dir, filename)
         dst = os.path.join(output_dir, filename)
-
         if process_image(src, dst):
             processed += 1
 
-    print(f"\nFertig! {processed} Bilder zugeschnitten.")
+    if not silent:
+        print(f"[Cut] Fertig: {processed} Dateien")
+    return processed
+
+
+# =====================================================================================
+# STARTPUNKT
+# =====================================================================================
+if __name__ == "__main__":
+    print_settings()
+    input_dir = SETTINGS["paths"]["input_folder"]
+    output_dir = os.path.join(input_dir, SETTINGS["paths"]["output_folder"])
+    total = run_from_magic(input_dir, output_dir, silent=True)
+    print(f"\nFertig! {total} Bilder zugeschnitten.")
     print(f"Ausgabe: {output_dir}")

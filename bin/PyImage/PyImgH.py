@@ -158,6 +158,29 @@ def process_image(img_path, output_path):
         log_message(error_msg)
         print(error_msg)
         return False
+
+
+def run_from_magic(input_dir: str, output_dir: str, silent: bool = False) -> int:
+    """Führt PyImgH auf einem Ordner aus (für PyIMagic)."""
+    input_dir = os.path.abspath(input_dir)
+    output_dir = os.path.abspath(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    if not silent:
+        print(f"[H] Eingang: {input_dir}")
+        print(f"[H] Ausgabe: {output_dir}")
+
+    processed_files = 0
+    for filename in os.listdir(input_dir):
+        if filename.lower().endswith(SETTINGS['paths']['supported_formats']):
+            input_path = os.path.join(input_dir, filename)
+            output_path = os.path.join(output_dir, filename)
+            if process_image(input_path, output_path):
+                processed_files += 1
+
+    if not silent:
+        print(f"[H] Fertig: {processed_files} Dateien")
+    return processed_files
 # =====================================================================================
 # STARTROUTINE
 # =====================================================================================
@@ -167,16 +190,7 @@ if __name__ == "__main__":
     # Ordner erstellen
     output_dir = os.path.join(SETTINGS['paths']['input_folder'], 
                             SETTINGS['paths']['output_folder'])
-    os.makedirs(output_dir, exist_ok=True)
+    total = run_from_magic(SETTINGS['paths']['input_folder'], output_dir, silent=True)
     
-    # Dateiverarbeitung
-    processed_files = 0
-    for filename in os.listdir(SETTINGS['paths']['input_folder']):
-        if filename.lower().endswith(SETTINGS['paths']['supported_formats']):
-            input_path = os.path.join(SETTINGS['paths']['input_folder'], filename)
-            output_path = os.path.join(output_dir, filename)
-            if process_image(input_path, output_path):
-                processed_files += 1
-    
-    print(f"\nVerarbeitung abgeschlossen! {processed_files} Bilder konvertiert.")
+    print(f"\nVerarbeitung abgeschlossen! {total} Bilder konvertiert.")
     print(f"Ergebnisordner: {output_dir}")
