@@ -11,7 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Iterable, List, Sequence
-
+from dataclasses import dataclass, field
 
 USE_ICONS = os.environ.get("PLAIN_LOGS") is None
 ICON_INFO = "ℹ️" if USE_ICONS else "[INFO]"
@@ -24,6 +24,28 @@ ICON_WRAP = "🧩" if USE_ICONS else "[WRAP]"
 ICON_MODE = "⚙️" if USE_ICONS else "[MODE]"
 ICON_ROOT = "🔒" if USE_ICONS else "[ROOT]"
 
+@dataclass
+class VenvReport:
+    src_venv_txt: Path
+    target_dir: Path
+    venv_dir: Path
+    created: bool           # True = neu (oder würde neu angelegt)
+    venv_ok: bool           # True = venv-Erstellung ok (bzw. Dry-Run)
+    requirements: List[str] # Pakete aus venv.txt
+    pip_ok: bool | None     # True/False = pip ok/Fehler, None = nicht ausgeführt (z.B. Dry-Run)
+
+
+@dataclass
+class InstallReport:
+    dry_run: bool
+    start_dir: Path
+    dest_base: Path
+    copied_files: int = 0
+    installed_dirs: set[Path] = field(default_factory=set)
+    venv_created_count: int = 0
+    venv_reports: List[VenvReport] = field(default_factory=list)
+    wrapper_count: int = 0
+    wrapper_paths: List[Path] = field(default_factory=list)
 
 def log(msg: str) -> None:
     prefix = ICON_INFO if USE_ICONS else ICON_INFO
@@ -160,7 +182,13 @@ def collect_files(start_dir: Path, pattern: str) -> List[Path]:
     return matches
 
 
-def copy_py_files(py_files: Sequence[Path], start_dir: Path, dest_base: Path, dry_run: bool) -> int:
+def copy_py_files(
+    py_files: Sequence[Path],
+    start_dir: Path,
+    dest_base: Path,
+    dry_run: bool,
+    report: InstallReport | None = None,
+) -> int:
     copied = 0
     for src in py_files:
         try:
@@ -176,7 +204,12 @@ def copy_py_files(py_files: Sequence[Path], start_dir: Path, dest_base: Path, dr
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
         copied += 1
+        if report is not None:
+            # Zielordner merken (auch im Dry-Run)
+            report.installed_dirs.add(dest.parent)
     log(f"Kopiert: {copied} .py-Dateien nach '{dest_base}'.")
+    if report is not None:
+        report.copied_files = copied
     return copied
 
 
@@ -211,7 +244,7 @@ def ensure_venv(target_dir: Path, dry_run: bool) -> bool:
         return False
 
 
-def install_requirements(venv_dir: Path, requirements: List[str], dry_run: bool, src_label: str) -> None:
+def install_requirements(venv_dir: Path, requirements: List[str], dry_run: bool, src_label: str) -> bool:
     py_bin = venv_dir / "bin" / "python"
     pip_bin = venv_dir / "bin" / "pip"
 
@@ -221,16 +254,20 @@ def install_requirements(venv_dir: Path, requirements: List[str], dry_run: bool,
             log(f"[dry-run] \"{pip_bin}\" install -r <temp_req_from_{src_label}>")
         else:
             log(f"Keine Pakete in {src_label} – leere venv.")
-        return
+        return True
 
     try:
-        subprocess.run([str(py_bin), "-m", "pip", "install", "--upgrade", "pip"], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(
+            [str(py_bin), "-m", "pip", "install", "--upgrade", "pip"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
     except subprocess.CalledProcessError as exc:
         warn(f"pip konnte nicht aktualisiert werden ({src_label}): {exc}")
 
     if not requirements:
         log(f"Keine Pakete in {src_label} – leere venv.")
-        return
+        return True
 
     with tempfile.NamedTemporaryFile("w", delete=False) as tmp:
         tmp_path = Path(tmp.name)
@@ -239,13 +276,20 @@ def install_requirements(venv_dir: Path, requirements: List[str], dry_run: bool,
     try:
         subprocess.run([str(pip_bin), "install", "-r", str(tmp_path)], check=True)
         log(f"Installiere Pakete aus {src_label}")
+        return True
     except subprocess.CalledProcessError as exc:
         warn(f"Installation fehlgeschlagen ({src_label}): {exc}")
+        return False
     finally:
         tmp_path.unlink(missing_ok=True)
 
-
-def handle_venvs(venv_txt_files: Sequence[Path], start_dir: Path, dest_base: Path, dry_run: bool) -> int:
+def handle_venvs(
+    venv_txt_files: Sequence[Path],
+    start_dir: Path,
+    dest_base: Path,
+    dry_run: bool,
+    report: InstallReport | None = None,
+) -> int:
     created = 0
     for vfile in venv_txt_files:
         src_dir = vfile.parent
@@ -262,19 +306,43 @@ def handle_venvs(venv_txt_files: Sequence[Path], start_dir: Path, dest_base: Pat
             tgt_dir.mkdir(parents=True, exist_ok=True)
 
         existed = venv_dir.exists()
-        if ensure_venv(tgt_dir, dry_run):
+        venv_ok = ensure_venv(tgt_dir, dry_run)
+
+        reqs = load_requirements(vfile)
+        try:
+            label = vfile.relative_to(start_dir)
+        except ValueError:
+            label = vfile
+
+        pip_ok: bool | None = None
+        if venv_ok:
+            if dry_run:
+                # nur Kommandos anzeigen
+                install_requirements(venv_dir, reqs, dry_run, str(label))
+            else:
+                pip_ok = install_requirements(venv_dir, reqs, dry_run, str(label))
             if not existed:
                 created += 1
-            reqs = load_requirements(vfile)
-            try:
-                label = vfile.relative_to(start_dir)
-            except ValueError:
-                label = vfile
-            install_requirements(venv_dir, reqs, dry_run, str(label))
+
+        if report is not None:
+            report.installed_dirs.add(tgt_dir)
+            report.venv_reports.append(
+                VenvReport(
+                    src_venv_txt=vfile,
+                    target_dir=tgt_dir,
+                    venv_dir=venv_dir,
+                    created=(not existed and venv_ok),
+                    venv_ok=venv_ok,
+                    requirements=reqs,
+                    pip_ok=None if dry_run else pip_ok,
+                )
+            )
+
     if created:
         log(f"Angelegte venvs: {created}")
+    if report is not None:
+        report.venv_created_count = created
     return created
-
 
 def find_dest_py_files(dest_base: Path) -> List[Path]:
     matches: List[Path] = []
@@ -341,7 +409,13 @@ def install_wrapper(wrapper_path: Path, content: str, dry_run: bool, force_root:
     return True
 
 
-def create_wrappers(dest_py_files: Sequence[Path], wrapper_dir: Path, dry_run: bool, force_root: bool) -> int:
+def create_wrappers(
+    dest_py_files: Sequence[Path],
+    wrapper_dir: Path,
+    dry_run: bool,
+    force_root: bool,
+    report: InstallReport | None = None,
+) -> int:
     wrappers = 0
     for file_path in dest_py_files:
         name = file_path.stem
@@ -349,19 +423,87 @@ def create_wrappers(dest_py_files: Sequence[Path], wrapper_dir: Path, dry_run: b
         content = write_wrapper_content(file_path)
         if install_wrapper(wrapper_path, content, dry_run, force_root):
             wrappers += 1
+            if report is not None:
+                report.wrapper_paths.append(wrapper_path)
         else:
             warn(f"Wrapper für '{file_path}' konnte nicht erstellt werden.")
     log(f"Wrapper erstellt: {wrappers}")
+    if report is not None:
+        report.wrapper_count = wrappers
     return wrappers
 
-
-def print_summary(copied: int, venvs_created: int, wrappers: int, dry_run: bool) -> None:
+def print_summary(report: InstallReport) -> None:
     print(f"{ICON_SUMMARY} Übersicht:")
-    print(f"  {ICON_MODE} Modus: {'Dry-Run (keine Änderungen)' if dry_run else 'Ausgeführt'}")
-    print(f"  {ICON_PY} .py-Dateien kopiert: {copied}")
-    print(f"  {ICON_VENV} Neue venvs: {venvs_created}")
-    print(f"  {ICON_WRAP} Wrapper erstellt: {wrappers}")
+    print(f"  {ICON_MODE} Modus: {'Dry-Run (keine Änderungen)' if report.dry_run else 'Ausgeführt'}")
 
+    venv_total = len(report.venv_reports)
+    pip_ok = sum(1 for v in report.venv_reports if v.pip_ok is True)
+    pip_fail = sum(1 for v in report.venv_reports if v.pip_ok is False)
+
+    print(f"  {ICON_PY} .py-Dateien kopiert: {report.copied_files}")
+    print(f"  {ICON_VENV} venvs gesamt: {venv_total} (neu: {report.venv_created_count})")
+    if not report.dry_run and venv_total:
+        print(f"           pip-Installationen: OK: {pip_ok}, Fehler: {pip_fail}")
+    print(f"  {ICON_WRAP} Wrapper erstellt: {report.wrapper_count}")
+    print()
+
+    # 1) Welche Zielordner wurden installiert?
+    if report.installed_dirs:
+        print(f"{ICON_PY} Installierte Zielordner (relativ zu {report.dest_base}):")
+        for d in sorted(report.installed_dirs):
+            try:
+                rel = d.relative_to(report.dest_base)
+            except ValueError:
+                rel = d
+            print(f"   - {rel}")
+        print()
+    else:
+        print(f"{ICON_PY} Keine Zielordner mit .py-Dateien oder venvs.")
+        print()
+
+    # 2) VMs / venvs – wurden sie alle installiert?
+    if report.venv_reports:
+        print(f"{ICON_VENV} Details zu virtuellen Umgebungen:")
+        for v in sorted(report.venv_reports, key=lambda x: str(x.target_dir)):
+            try:
+                rel = v.target_dir.relative_to(report.dest_base)
+            except ValueError:
+                rel = v.target_dir
+
+            if not v.venv_ok and not report.dry_run:
+                status = "FEHLER: venv konnte nicht erstellt werden"
+            else:
+                if v.created and report.dry_run:
+                    status = "würde neu erstellt (Dry-Run)"
+                elif v.created:
+                    status = "neu erstellt"
+                else:
+                    status = "bereits vorhanden"
+
+            if report.dry_run:
+                pip_status = "pip: (Dry-Run – keine Installation ausgeführt)"
+            elif not v.venv_ok:
+                pip_status = "pip: nicht ausgeführt (venv-Fehler)"
+            elif not v.requirements:
+                pip_status = "pip: keine Pakete (leere venv)"
+            else:
+                if v.pip_ok is True:
+                    pip_status = "pip: OK"
+                elif v.pip_ok is False:
+                    pip_status = "pip: FEHLER (siehe Log oben)"
+                else:
+                    pip_status = "pip: unbekannter Status"
+
+            print(f"   - {rel} [{status}]")
+            if v.requirements:
+                print(f"     Pakete ({len(v.requirements)}): {', '.join(v.requirements)}")
+            else:
+                print("     Pakete: (keine)")
+            print(f"     {pip_status}")
+        print()
+    else:
+        print(f"{ICON_VENV} Keine venvs verarbeitet.")
+        print()
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=False)
@@ -408,6 +550,9 @@ def main(argv: Sequence[str]) -> int:
 
     dest_base.mkdir(parents=True, exist_ok=True)
 
+    # Neuer Report für die Zusammenfassung
+    report = InstallReport(dry_run=args.dry_run, start_dir=start_dir, dest_base=dest_base)
+
     if args.clear:
         clear_install(dest_base, wrapper_dir, args.dry_run, args.yes)
 
@@ -418,7 +563,8 @@ def main(argv: Sequence[str]) -> int:
     else:
         warn("Keine .py-Dateien gefunden (nach Ausschlüssen).")
 
-    copied = copy_py_files(py_files, start_dir, dest_base, args.dry_run)
+    # Füllt report.copied_files und report.installed_dirs
+    copy_py_files(py_files, start_dir, dest_base, args.dry_run, report)
 
     log("Suche nach venv.txt ...")
     venv_txt_files = collect_files(start_dir, "venv.txt")
@@ -427,16 +573,18 @@ def main(argv: Sequence[str]) -> int:
     else:
         log("Keine venv.txt gefunden. Überspringe venv-Erstellung.")
 
-    venvs_created = handle_venvs(venv_txt_files, start_dir, dest_base, args.dry_run)
+    # Füllt report.venv_reports und report.venv_created_count
+    handle_venvs(venv_txt_files, start_dir, dest_base, args.dry_run, report)
 
     log("Erzeuge Wrapper ...")
     dest_py_files = find_dest_py_files(dest_base)
-    wrappers = create_wrappers(dest_py_files, wrapper_dir, args.dry_run, args.root)
+
+    # Füllt report.wrapper_paths und report.wrapper_count
+    create_wrappers(dest_py_files, wrapper_dir, args.dry_run, args.root, report)
 
     log("Fertig.")
-    print_summary(copied, venvs_created, wrappers, args.dry_run)
+    print_summary(report)
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

@@ -1,4 +1,5 @@
 # Pakete für das PyImage-Modul (inkl. Real-ESRGAN)
+#--version xxx
 pillow
 numpy
 opencv-python
