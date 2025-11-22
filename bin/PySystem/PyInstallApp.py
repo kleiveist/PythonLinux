@@ -1,248 +1,259 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 """
-InstallAppImage.py
+PyInstallApp - Installiere AppImages und .desktop-Dateien bequem ins System.
 
-Ablauf:
-
-1. Im AKTUELLEN ORDNER nach *.AppImage / *.appimage suchen.
-2. Für jede gefundene AppImage-Datei:
-   - AppImage nach  <HOME>/Dokumente|Documents/AppImage  kopieren
-   - PNG mit gleichem Namen (falls vorhanden) ebenfalls dorthin kopieren
-   - PNG zusätzlich als Kopie nach  <HOME>/.local/share/icons  kopieren
-3. Aus der Kopie im Dokumentenordner:
-   - Ausführbar machen
-   - .desktop-Datei in ~/.local/share/applications erzeugen
-     - Exec = Pfad zur AppImage-Kopie im Dokumentenordner
-     - Path = Dokumentenordner/AppImage
-     - Icon = NUR der PNG-Dateiname (z.B. Obsidian.png)
-4. KEIN Wrapper-Script in /bin o.ä.
-
-Aufruf:
-    python3 InstallApp.py
+Funktionen:
+- AppImages in ein zentrales Verzeichnis unter ~/Dokumente/Apps/AppImage kopieren
+- Wrapper-Desktop-Dateien für AppImages in ~/.local/share/applications anlegen
+- .desktop-Dateien aus einem Ordner "Desktop" installieren
+- .png-Icons nach ~/.local/share/icons kopieren
+- Kann sowohl mit Unterordnern AppImage/Desktop als auch direkt mit Dateien im aktuellen Ordner umgehen.
 """
 
-import os
-import re
-import stat
 import sys
 import shutil
 from pathlib import Path
 
-ARCH_TOKENS = {"x86_64", "amd64", "arm64", "aarch64", "i386", "i686"}
+# ======= Einfache Terminal-Formatierung =======
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
 
+def headline(text: str) -> None:
+    print(f"\n{BOLD}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓{RESET}")
+    print(f"{BOLD}┃ {text:<44}┃{RESET}")
+    print(f"{BOLD}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛{RESET}\n")
 
-def human_name_from_basename(basename: str) -> str:
-    """Erzeuge einen hübschen Anzeigenamen aus dem Dateinamen ohne Endung."""
-    name = basename
-    parts = re.split(r"[-_ ]+", name)
-    if parts and parts[-1].lower() in ARCH_TOKENS:
-        parts = parts[:-1]
-    name = " ".join(parts)
-    name = re.sub(r"([-_ ]?v?\d+(\.\d+){0,3}([-_][A-Za-z0-9]+)?)$", "", name).strip()
-    name = re.sub(r"[_\-]+", " ", name).strip()
-    return name[:1].upper() + name[1:] if name else basename
+def info(msg: str) -> None:
+    print(f"ℹ️  {msg}")
 
+def success(msg: str) -> None:
+    print(f"{GREEN}✅ {msg}{RESET}")
 
-def make_appimage_executable(path: Path) -> None:
-    st = path.stat()
-    new_mode = st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-    if new_mode != st.st_mode:
-        path.chmod(new_mode)
+def warn(msg: str) -> None:
+    print(f"{YELLOW}⚠️  {msg}{RESET}")
 
+def error(msg: str) -> None:
+    print(f"{RED}❌ {msg}{RESET}")
 
-def safe_id_from_name(name: str) -> str:
-    """Erzeuge eine dateinamenfreundliche ID (lowercase, a-z0-9-)."""
-    safe = name.lower()
-    safe = re.sub(r"[^a-z0-9]+", "-", safe).strip("-")
-    return safe or "appimage-app"
+# ======= Pfade ermitteln =======
 
-
-def unique_path(base: Path) -> Path:
-    """Erzeuge eindeutigen Pfad, falls bereits vorhanden (suffix -1, -2, ...)."""
-    if not base.exists():
-        return base
-    i = 1
-    while True:
-        candidate = base.with_name(f"{base.stem}-{i}{base.suffix}")
-        if not candidate.exists():
+def detect_docs_dir() -> Path:
+    home = Path.home()
+    for name in ("Dokumente", "Documents"):
+        candidate = home / name
+        if candidate.is_dir():
             return candidate
-        i += 1
+    return home
 
+HOME = Path.home()
+DOCS_DIR = detect_docs_dir()
+APPS_DIR = DOCS_DIR / "Apps"
+APPIMAGE_TARGET = APPS_DIR / "AppImage"
+DESKTOP_TARGET = APPS_DIR / "Desktop"
+ICON_DIR = HOME / ".local" / "share" / "icons"
+APPLICATIONS_DIR = HOME / ".local" / "share" / "applications"
 
-def build_desktop_entry(
-    name: str,
-    exec_path: Path,
-    workdir: Path,
-    icon_name: str | None,
-) -> str:
-    """
-    Erzeuge den Inhalt einer .desktop-Datei.
+def ensure_directories():
+    for d in (APPS_DIR, APPIMAGE_TARGET, DESKTOP_TARGET, ICON_DIR, APPLICATIONS_DIR):
+        d.mkdir(parents=True, exist_ok=True)
 
-    - Exec: voller Pfad zur AppImage-Kopie im Dokumentenordner
-    - Path: Dokumenten-AppImage-Ordner
-    - Icon: nur der Dateiname (z.B. Obsidian.png), KEIN vollständiger Pfad
-    """
-    exec_field = f"\"{exec_path}\" %U"
+# ======= Hilfsfunktionen =======
 
-    lines = [
-        "[Desktop Entry]",
-        "Type=Application",
-        f"Name={name}",
-        f"Exec={exec_field}",
-        f"Path={workdir}",
-        "Terminal=false",
-        "Categories=Utility;",
-        "NoDisplay=false",
-        "StartupNotify=true",
-    ]
-    if icon_name:
-        lines.append(f"Icon={icon_name}")
-    return "\n".join(lines) + "\n"
+def slugify_name(name: str) -> str:
+    """Einfache Slug-Funktion für Dateinamen."""
+    keep = []
+    for ch in name:
+        if ch.isalnum():
+            keep.append(ch.lower())
+        elif ch in (" ", "-", "_"):
+            keep.append("-")
+    slug = "".join(keep).strip("-")
+    return slug or "appimage"
 
+def detect_source_dirs(base: Path):
+    """Finde Quellordner für AppImages und Desktop-Dateien."""
+    appimage_dir = None
+    desktop_dir = None
 
-def get_documents_dir() -> Path:
-    """
-    Versuche, das Dokumentenverzeichnis zu finden.
-    - erst XDG_DOCUMENTS_DIR (falls gesetzt)
-    - dann ~/Documents
-    - dann ~/Dokumente
-    - Fallback: ~/Documents
-    """
-    xdg_docs = os.environ.get("XDG_DOCUMENTS_DIR")
-    if xdg_docs:
-        p = Path(os.path.expanduser(xdg_docs))
-        if p.exists():
-            return p
+    appimage_files_here = list(base.glob("*.AppImage")) + list(base.glob("*.appimage"))
+    desktop_files_here = list(base.glob("*.desktop"))
 
-    for name in ("Documents", "Dokumente"):
-        p = Path.home() / name
-        if p.exists():
-            return p
+    if appimage_files_here:
+        appimage_dir = base
+    if desktop_files_here:
+        desktop_dir = base
 
-    return Path.home() / "Documents"
+    # Wenn im Basisordner nichts ist, nach Unterordnern suchen
+    if appimage_dir is None:
+        if (base / "AppImage").is_dir():
+            appimage_dir = base / "AppImage"
+    if desktop_dir is None:
+        if (base / "Desktop").is_dir():
+            desktop_dir = base / "Desktop"
 
+    return appimage_dir, desktop_dir
 
-def get_icons_dir() -> Path:
-    """
-    Liefert den Icon-Ordner:
-    <HOME>/.local/share/icons  (bzw. $XDG_DATA_HOME/icons)
-    """
-    xdg_data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return xdg_data_home / "icons"
+# ======= AppImage-Verarbeitung =======
 
+def process_appimages(appimage_dir: Path):
+    headline("AppImages installieren")
+    appimages = sorted(list(appimage_dir.glob("*.AppImage")) + list(appimage_dir.glob("*.appimage")))
+    if not appimages:
+        warn(f"Keine AppImages gefunden in: {appimage_dir}")
+        return
+
+    for src in appimages:
+        name = src.stem
+        slug = slugify_name(name)
+        dest_appimage = APPIMAGE_TARGET / src.name
+
+        try:
+            shutil.copy2(src, dest_appimage)
+        except Exception as e:
+            error(f"Konnte AppImage nicht kopieren: {src} → {dest_appimage} ({e})")
+            continue
+
+        # Icon suchen: gleiche Basis, .png im selben Ordner
+        icon_src = None
+        for ext in (".png", ".svg", ".xpm"):
+            candidate = src.with_suffix(ext)
+            if candidate.is_file():
+                icon_src = candidate
+                break
+
+        icon_name = None
+        if icon_src:
+            icon_name = icon_src.stem  # Desktop-File benutzt typischerweise nur den Namen ohne Pfad/Endung
+            try:
+                shutil.copy2(icon_src, ICON_DIR / icon_src.name)
+                shutil.copy2(icon_src, APPIMAGE_TARGET / icon_src.name)
+                icon_msg = f"{icon_src.name} (→ {ICON_DIR}, → {APPIMAGE_TARGET})"
+            except Exception as e:
+                warn(f"Icon konnte nicht kopiert werden: {icon_src} ({e})")
+                icon_msg = f"{icon_src.name} (Fehler beim Kopieren)"
+        else:
+            icon_msg = "kein passendes Icon gefunden"
+
+        # .desktop-Datei erstellen (Wrapper)
+        desktop_filename = f"{slug}.desktop"
+        desktop_path = APPLICATIONS_DIR / desktop_filename
+
+        desktop_content = [
+            "[Desktop Entry]",
+            "Type=Application",
+            f"Name={name}",
+            f"Exec={dest_appimage} %U",
+            f"Path={APPIMAGE_TARGET}",
+            f"Icon={icon_name or slug}",
+            "Terminal=false",
+            "Categories=Utility;",
+        ]
+        try:
+            desktop_path.write_text("\n".join(desktop_content), encoding="utf-8")
+        except Exception as e:
+            error(f".desktop-Datei konnte nicht geschrieben werden: {desktop_path} ({e})")
+            continue
+
+        success(f"Integriert: {src.name}")
+        print(f"   📦 Quelle:  {src}")
+        print(f"   📁 Ziel:    {dest_appimage}")
+        print(f"   ⚙️  Exec:   {dest_appimage}")
+        print(f"   🧩 Desktop: {desktop_path}")
+        print(f"   🖼️ Icon:    {icon_msg}")
+
+# ======= Desktop-Dateien / Icons =======
+
+def process_desktop_files(desktop_dir: Path):
+    headline(".desktop & Icons installieren")
+    desktop_files = sorted(desktop_dir.glob("*.desktop"))
+    png_files = sorted([p for p in desktop_dir.glob("*.png")])
+
+    if not desktop_files and not png_files:
+        warn(f"Keine .desktop oder .png-Dateien gefunden in: {desktop_dir}")
+        return
+
+    # Icons zuerst kopieren
+    if png_files:
+        info(f"Icons kopieren aus {desktop_dir} …")
+        for icon in png_files:
+            try:
+                shutil.copy2(icon, ICON_DIR / icon.name)
+                shutil.copy2(icon, DESKTOP_TARGET / icon.name)
+                success(f"Icon installiert: {icon.name}")
+            except Exception as e:
+                error(f"Icon konnte nicht kopiert werden: {icon} ({e})")
+    else:
+        warn("Keine .png-Icons gefunden.")
+
+    # .desktop-Dateien kopieren
+    if desktop_files:
+        info(f".desktop-Dateien installieren aus {desktop_dir} …")
+        for df in desktop_files:
+            dest_backup = DESKTOP_TARGET / df.name
+            dest_sys = APPLICATIONS_DIR / df.name
+            try:
+                shutil.copy2(df, dest_backup)
+                shutil.copy2(df, dest_sys)
+            except Exception as e:
+                error(f".desktop-Datei konnte nicht kopiert werden: {df} ({e})")
+                continue
+
+            success(f".desktop installiert: {df.name}")
+            print(f"   🧩 System:  {dest_sys}")
+            print(f"   📁 Backup:  {dest_backup}")
+    else:
+        warn("Keine .desktop-Dateien gefunden.")
+
+# ======= main =======
 
 def main():
-    cwd = Path.cwd()
+    ensure_directories()
 
-    # .desktop-Zielordner
-    xdg_data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    applications_dir = xdg_data_home / "applications"
-    applications_dir.mkdir(parents=True, exist_ok=True)
-
-    # Zielordner für AppImages: <HOME>/Dokumente|Documents/AppImage
-    documents_dir = get_documents_dir()
-    appimage_repo = documents_dir / "AppImage"
-    appimage_repo.mkdir(parents=True, exist_ok=True)
-
-    # Zielordner für Icons: <HOME>/.local/share/icons
-    icons_dir = get_icons_dir()
-    icons_dir.mkdir(parents=True, exist_ok=True)
-
-    # AppImages im aktuellen Ordner finden
-    appimages = sorted(list(cwd.glob("*.AppImage")) + list(cwd.glob("*.appimage")))
-    if not appimages:
-        print("Keine AppImage-Dateien im aktuellen Ordner gefunden.")
-        sys.exit(0)
-
-    print(f"Dokumentenverzeichnis: {documents_dir}")
-    print(f"Zielordner für AppImages: {appimage_repo}")
-    print(f"Icon-Ordner: {icons_dir}\n")
-
-    created = 0
-
-    for original_appimage in appimages:
-        try:
-            # --- STEP 1: AppImage nach Dokumente/AppImage kopieren ---
-            target_appimage = appimage_repo / original_appimage.name
-            shutil.copy2(original_appimage, target_appimage)
-
-            # PNG mit gleichem Namen im ursprünglichen Ordner?
-            original_icon = original_appimage.with_suffix(".png")
-            icon_name = None
-
-            if original_icon.exists():
-                icon_name = original_icon.name
-
-                # PNG in Dokumente/AppImage kopieren
-                target_icon_in_repo = appimage_repo / original_icon.name
-                shutil.copy2(original_icon, target_icon_in_repo)
-
-                # PNG zusätzlich nach ~/.local/share/icons kopieren
-                target_icon_in_icons = icons_dir / original_icon.name
-                shutil.copy2(original_icon, target_icon_in_icons)
-
-            # --- Ab hier mit der KOPIE im Dokumentenordner arbeiten ---
-            make_appimage_executable(target_appimage)
-
-            base = target_appimage.name.rsplit(".", 1)[0]
-            human_name = human_name_from_basename(base)
-            app_id = safe_id_from_name(human_name)
-
-            # .desktop-Inhalt erzeugen:
-            # - Exec und Path zeigen auf Dokumente/AppImage
-            # - Icon = nur Dateiname (z.B. Obsidian.png)
-            desktop_text = build_desktop_entry(
-                name=human_name,
-                exec_path=target_appimage.resolve(),
-                workdir=appimage_repo.resolve(),
-                icon_name=icon_name,
-            )
-
-            desktop_filename = f"{app_id}.desktop"
-            desktop_path = applications_dir / desktop_filename
-
-            # Optionale Aufräumaktion: alte -1, -2, ... Dateien löschen
-            for old in applications_dir.glob(f"{app_id}-*.desktop"):
-                try:
-                    old.unlink()
-                except Exception:
-                    pass
-
-            # Datei mit festem Namen immer überschreiben
-            desktop_path.write_text(desktop_text, encoding="utf-8")
-            desktop_path.chmod(0o644)
-
-            print(f"✓ Integriert: {original_appimage.name}")
-            print(f"  Kopie:   {target_appimage.resolve()}")
-            print(f"  Name:    {human_name}")
-            print(f"  Exec:    {target_appimage.resolve()}")
-            print(f"  Path:    {appimage_repo.resolve()}")
-            if icon_name:
-                print(f"  Icon:    {icon_name} (Kopie in {icons_dir} und {appimage_repo})")
-            else:
-                print("  Icon:    (keine passende PNG gefunden)")
-            print(f"  .desktop: {desktop_path}\n")
-
-            created += 1
-
-        except Exception as e:
-            print(f"⚠ Fehler bei {original_appimage.name}: {e}")
-
-    if created:
-        # Desktop-Cache optional aktualisieren (Fehler ignorieren)
-        for cmd in ("update-desktop-database", "xdg-desktop-menu"):
-            try:
-                os.system(f"{cmd} >/dev/null 2>&1")
-            except Exception:
-                pass
-
-        print(f"Fertig. {created} AppImage(s) integriert.")
-        print("Hinweis: Wrapper sind .desktop-Dateien, keine Skripte in /bin.")
+    if len(sys.argv) > 1:
+        base = Path(sys.argv[1]).expanduser().resolve()
     else:
-        print("Nichts erstellt.")
+        base = Path.cwd()
 
+    headline("PyInstallApp – AppImage & Desktop Installer")
+    info(f"Basisordner:       {base}")
+    info(f"Dokumentenordner:  {DOCS_DIR}")
+    info(f"Apps-Ordner:       {APPS_DIR}")
+    info(f"AppImage-Ziel:     {APPIMAGE_TARGET}")
+    info(f"Desktop-Ziel:      {DESKTOP_TARGET}")
+    info(f"Icon-Ordner:       {ICON_DIR}")
+    info(f"Applications-Dir:  {APPLICATIONS_DIR}")
+    print()
+
+    if not base.exists():
+        error(f"Basisordner existiert nicht: {base}")
+        sys.exit(1)
+
+    appimage_dir, desktop_dir = detect_source_dirs(base)
+
+    if not appimage_dir and not desktop_dir:
+        warn("Keine AppImages oder .desktop-Dateien gefunden.")
+        warn("Lege Dateien entweder direkt in den Basisordner oder in Unterordner 'AppImage' / 'Desktop'.")
+        return
+
+    # Wichtig: unabhängig voneinander behandeln
+    if appimage_dir:
+        info(f"AppImages werden verarbeitet aus: {appimage_dir}")
+        process_appimages(appimage_dir)
+    else:
+        info("Keine AppImages zu verarbeiten.")
+
+    if desktop_dir:
+        info(f".desktop / Icons werden verarbeitet aus: {desktop_dir}")
+        process_desktop_files(desktop_dir)
+    else:
+        info("Keine .desktop / Icon-Dateien zu verarbeiten.")
+
+    print()
+    success("Fertig 🎉")
 
 if __name__ == "__main__":
     main()
