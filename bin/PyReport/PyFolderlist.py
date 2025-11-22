@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Folder listing CLI for Linux.
-# Einheitliche Beispiele:
-#   folderlist                       -> Standard: eine Datei 'FolderList.txt', Icons an, Tiefe 5
-#   folderlist --3                   -> wie oben, aber Tiefe = 3
-#   folderlist 3                     -> (weiterhin unterstützt) Tiefe = 3
-#   folderlist --noic 3              -> Icons aus, Tiefe = 3
-#   folderlist --no-files --4        -> nur Ordner, Tiefe = 4
-#   folderlist --multi --3           -> erzeugt 1..3-FolderList.txt
-#   folderlist --start .             -> starte in Pfad (Standard: aktuelles Verzeichnis)
-#   folderlist --output out.txt      -> Name der Zieldatei im Einzeldatei-Modus
+# PyFolderList – Ordnerbaum im Terminal oder als Markdown-Datei.
+# Beispiele:
+#   PyFolderList                      -> Standard: Ausgabe im Terminal, Icons an, Tiefe 5
+#   PyFolderList --3                  -> wie oben, aber Tiefe = 3
+#   PyFolderList 3                    -> (weiterhin unterstützt) Tiefe = 3
+#   PyFolderList --noic 3             -> Icons aus, Tiefe = 3
+#   PyFolderList --no-files --4       -> nur Ordner, Tiefe = 4
+#   PyFolderList --multi --3          -> 1..3-Tiefen nacheinander im Terminal ausgeben
+#   PyFolderList --md                 -> wie früher: FolderList.txt im Startordner erzeugen
+#   PyFolderList --md --multi --3     -> 1..3-FolderList.txt im Startordner erzeugen
+#   PyFolderList --start .            -> starte in Pfad (Standard: aktuelles Verzeichnis)
+#   PyFolderList --output out.txt --md-> Name der Zieldatei im Einzeldatei-Modus
 
 import argparse
 import os
@@ -105,6 +107,35 @@ def build_tree(
             lines.append(indent + connector + name)
     return lines
 
+def generate_structure_lines(
+    start_path: str,
+    depth_limit: int,
+    use_icons: bool = True,
+    folder_icon: str = DEFAULT_FOLDER_ICON,
+    files_scan: bool = True,
+    icon_map: Optional[Dict[str, str]] = None,
+    default_file_icon: str = DEFAULT_FILE_ICON
+) -> List[str]:
+    """
+    Baut die Baumstruktur als Liste von Zeilen auf (für Terminal ODER Datei).
+    """
+    icon = folder_icon if use_icons else ""
+    root_name = os.path.basename(os.path.abspath(start_path)) or start_path
+    lines: List[str] = [f"{icon}{root_name}"]
+    if depth_limit > 0:
+        lines.extend(
+            build_tree(
+                start_path,
+                depth_limit,
+                use_icons=use_icons,
+                folder_icon=folder_icon,
+                files_scan=files_scan,
+                icon_map=icon_map,
+                default_file_icon=default_file_icon,
+            )
+        )
+    return lines
+
 def write_structure(
     start_path: str,
     depth_limit: int,
@@ -115,21 +146,18 @@ def write_structure(
     icon_map: Optional[Dict[str, str]] = None,
     default_file_icon: str = DEFAULT_FILE_ICON
 ):
-    icon = folder_icon if use_icons else ""
-    root_name = os.path.basename(os.path.abspath(start_path)) or start_path
-    lines = [f"{icon}{root_name}"]
-    if depth_limit > 0:
-        lines.extend(
-            build_tree(
-                start_path,
-                depth_limit,
-                use_icons=use_icons,
-                folder_icon=folder_icon,
-                files_scan=files_scan,
-                icon_map=icon_map,
-                default_file_icon=default_file_icon
-            )
-        )
+    """
+    Schreibt die Baumstruktur in eine Datei (Markdown-/Text-Datei).
+    """
+    lines = generate_structure_lines(
+        start_path,
+        depth_limit,
+        use_icons=use_icons,
+        folder_icon=folder_icon,
+        files_scan=files_scan,
+        icon_map=icon_map,
+        default_file_icon=default_file_icon,
+    )
     with open(outfile, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
         f.write("\n")
@@ -149,7 +177,7 @@ def _postprocess_unknown(unknown: list) -> Tuple[Optional[int], bool]:
 
 def parse_args(argv: list) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="folderlist",
+        prog="PyFolderList",
         add_help=True,
         description="Erstellt eine textuelle Baumansicht des Verzeichnisses."
     )
@@ -157,14 +185,21 @@ def parse_args(argv: list) -> argparse.Namespace:
     parser.add_argument("tokens", nargs="*", help="Optionale freie Tokens: Tiefe (Zahl) und/oder 'noic'")
     parser.add_argument("--no-icons", "-N", action="store_true", help="Icons deaktivieren")
     parser.add_argument("--noic", action="store_true", dest="no_icons_alias", help="Alias für --no-icons")
-    parser.add_argument("--files", dest="files", action=argparse.BooleanOptionalAction, default=True, help="Dateien auflisten (Standard: an). '--no-files' nur Ordner.")
-    parser.add_argument("--multi", "-m", action="store_true", help="1..Tiefe-FolderList.txt erzeugen (statt einer Datei)")
-    parser.add_argument("--output", "-o", default="FolderList.txt", help="Zieldateiname im Einzeldatei-Modus (Standard: FolderList.txt)")
+    parser.add_argument("--files", dest="files", action=argparse.BooleanOptionalAction, default=True,
+                        help="Dateien auflisten (Standard: an). '--no-files' nur Ordner.")
+    parser.add_argument("--multi", "-m", action="store_true", help="1..Tiefe-FolderList ausgeben/erzeugen")
+    parser.add_argument("--output", "-o", default="FolderList.txt",
+                        help="Zieldateiname im Einzeldatei-Modus (Standard: FolderList.txt)")
     parser.add_argument("--start", "-s", default=".", help="Startpfad (Standard: aktuelles Verzeichnis)")
-    parser.add_argument("--depth", "-d", type=int, default=None, help="Tiefe explizit setzen (überschreibt Token)")
-    parser.add_argument("--max", type=int, default=5, help="Standard-Tiefe wenn keine Tiefe angegeben wurde (nur Einzeldatei-Modus). Default: 5")
+    parser.add_argument("--depth", "-d", type=int, default=None,
+                        help="Tiefe explizit setzen (überschreibt Token)")
+    parser.add_argument("--max", type=int, default=5,
+                        help="Standard-Tiefe wenn keine Tiefe angegeben wurde (nur Einzeldatei-Modus). Default: 5")
+    parser.add_argument("--md", "-M", action="store_true",
+                        help="Struktur wie bisher in Datei(en) schreiben (Markdown/Text). "
+                             "Ohne --md erfolgt die Ausgabe nur im Terminal.")
 
-    # parse_known_args erlaubt uns, "--3" als unknown einzusammeln
+    # parse_known_args erlaubt uns, "--<zahl>" als unknown einzusammeln
     args, unknown = parser.parse_known_args(argv)
     depth_from_unknown, noic_from_unknown = _postprocess_unknown(unknown)
 
@@ -204,29 +239,59 @@ def main(argv: list) -> int:
         print(f"Fehler: Startpfad existiert nicht oder ist kein Verzeichnis: {start_path}", file=sys.stderr)
         return 2
 
+    use_icons = not args.no_icons
+    files_scan = args.files
+
+    # MULTI-MODUS: mehrere Tiefen
     if args.multi:
         depth = args.depth if args.depth is not None else actual_max_depth(start_path)
         if depth <= 0:
-            write_structure(start_path, 0, os.path.join(start_path, "0-FolderList.txt"),
-                            use_icons=not args.no_icons, files_scan=args.files, icon_map=ICON_MAP)
-            print("Erstellt: 0-FolderList.txt")
+            # nur Wurzel
+            if args.md:
+                outfile = os.path.join(start_path, "0-FolderList.txt")
+                write_structure(start_path, 0, outfile,
+                                use_icons=use_icons, files_scan=files_scan, icon_map=ICON_MAP)
+                print(f"Erstellt: {os.path.basename(outfile)}")
+            else:
+                lines = generate_structure_lines(start_path, 0,
+                                                 use_icons=use_icons, files_scan=files_scan, icon_map=ICON_MAP)
+                print("\n".join(lines))
             return 0
+
         for d in range(1, depth + 1):
-            outfile = os.path.join(start_path, f"{d}-FolderList.txt")
-            write_structure(start_path, d, outfile,
-                            use_icons=not args.no_icons, files_scan=args.files, icon_map=ICON_MAP)
-            print(f"Erstellt: {os.path.basename(outfile)}")
+            if args.md:
+                # wie bisher: Pro Tiefe eine Datei
+                outfile = os.path.join(start_path, f"{d}-FolderList.txt")
+                write_structure(start_path, d, outfile,
+                                use_icons=use_icons, files_scan=files_scan, icon_map=ICON_MAP)
+                print(f"Erstellt: {os.path.basename(outfile)}")
+            else:
+                # Ausgabe nacheinander im Terminal
+                header = f"\n{'═' * 10} Tiefe {d} {'═' * 10}\n"
+                print(header)
+                lines = generate_structure_lines(start_path, d,
+                                                 use_icons=use_icons, files_scan=files_scan, icon_map=ICON_MAP)
+                print("\n".join(lines))
         return 0
-    else:
-        depth = args.depth if args.depth is not None else args.max
-        if depth < 0:
-            print("Fehler: Tiefe muss >= 0 sein.", file=sys.stderr)
-            return 2
+
+    # EINZEL-MODUS: eine Tiefe
+    depth = args.depth if args.depth is not None else args.max
+    if depth < 0:
+        print("Fehler: Tiefe muss >= 0 sein.", file=sys.stderr)
+        return 2
+
+    if args.md:
+        # wie bisher: in eine Datei schreiben
         outfile = os.path.join(start_path, args.output)
         write_structure(start_path, depth, outfile,
-                        use_icons=not args.no_icons, files_scan=args.files, icon_map=ICON_MAP)
+                        use_icons=use_icons, files_scan=files_scan, icon_map=ICON_MAP)
         print(f"Erstellt: {os.path.basename(outfile)} in {start_path}")
-        return 0
+    else:
+        # Standard jetzt: Ausgabe im Terminal
+        lines = generate_structure_lines(start_path, depth,
+                                         use_icons=use_icons, files_scan=files_scan, icon_map=ICON_MAP)
+        print("\n".join(lines))
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

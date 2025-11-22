@@ -1,14 +1,4 @@
-# Pakete für das PyImage-Modul (inkl. Real-ESRGAN)
+# Minimale Pakete für PyImgD.py und PyImgH.py
 pillow
 numpy
 opencv-python
-torch
-torchvision
-realesrgan
-basicsr
-facexlib
-gfpgan
-scipy
-requests
-tqdm
-pyyaml

@@ -1,0 +1,14 @@
+# Pakete für das PyImage-Modul (inkl. Real-ESRGAN)
+pillow
+numpy
+opencv-python
+torch
+torchvision
+basicsr
+facexlib
+realesrgan
+gfpgan
+scipy
+requests
+tqdm
+pyyaml
