@@ -17,20 +17,45 @@ set -euo pipefail
 # Konfiguration (überschreibbar via Umgebungsvariablen)
 # ------------------------------------------------------------------------------
 START_DIR="${START_DIR:-$PWD}"
-DEST_BASE="${DEST_BASE:-$HOME/Dokumente/Python}"
+# DEST_BASE wird nach Argument-Parsing gesetzt, um sudo/SUDO_USER zu berücksichtigen.
+DEST_BASE_ENV="${DEST_BASE:-}"
+DEST_BASE="${DEST_BASE_ENV:-$HOME/Dokumente/Python}"
 WRAPPER_DIR="${WRAPPER_DIR:-/usr/local/bin}"
 
 # Optionen
 CLEAR=0
 ASSUME_YES=0
 DRY_RUN=0
+FORCE_ROOT=0
 
 # ------------------------------------------------------------------------------
 # Log-Helfer
 # ------------------------------------------------------------------------------
-log()  { printf '%s\n' "[INFO]  $*"; }
-warn() { printf '%s\n' "[WARN]  $*" >&2; }
-err()  { printf '%s\n' "[ERROR] $*" >&2; }
+if [[ -z "${PLAIN_LOGS:-}" ]]; then
+  ICON_INFO="ℹ️"
+  ICON_WARN="⚠️"
+  ICON_ERR="❌"
+  ICON_SUM="📊"
+  ICON_MODE="⚙️"
+  ICON_PY="📂"
+  ICON_VENV="🐍"
+  ICON_WRAP="🧩"
+ICON_ROOT="🔒"
+else
+  ICON_INFO="[INFO]"
+  ICON_WARN="[WARN]"
+  ICON_ERR="[ERROR]"
+  ICON_SUM="[SUM]"
+  ICON_MODE="[MODE]"
+  ICON_PY="[PY]"
+  ICON_VENV="[VENV]"
+  ICON_WRAP="[WRAP]"
+  ICON_ROOT="[ROOT]"
+fi
+
+log()  { printf '%s %s\n' "$ICON_INFO" "$*"; }
+warn() { printf '%s %s\n' "$ICON_WARN" "$*" >&2; }
+err()  { printf '%s %s\n' "$ICON_ERR" "$*" >&2; }
 
 print_help() {
   cat <<'HLP'
@@ -41,6 +66,7 @@ Usage: ./install.sh [--clear] [--yes|-y] [--dry-run] [--help]
             - Entfernt markierte Wrapper im WRAPPER_DIR
 --yes, -y   Bestätigt Rückfragen automatisch (non-interaktiv)
 --dry-run   Zeigt nur an, was gelöscht/erstellt würde (keine Änderungen)
+--root      Erzwingt Wrapper-Installation via sudo nach /usr/local/bin
 --help      Diese Hilfe
 HLP
 }
@@ -51,11 +77,32 @@ while [[ $# -gt 0 ]]; do
     --clear) CLEAR=1 ;;
     --yes|-y) ASSUME_YES=1 ;;
     --dry-run) DRY_RUN=1 ;;
+    --root) FORCE_ROOT=1 ;;
     --help|-h) print_help; exit 0 ;;
     *) err "Unbekannte Option: $1"; print_help; exit 2 ;;
   esac
   shift
 done
+
+if (( FORCE_ROOT )); then
+  WRAPPER_DIR="/usr/local/bin"
+fi
+
+# Effektives HOME bestimmen (für DEST_BASE-Default)
+if (( FORCE_ROOT )); then
+  EFFECTIVE_HOME="/root"
+elif [[ -n "${SUDO_USER:-}" ]]; then
+  # Home des ursprünglichen Users auflösen
+  EFFECTIVE_HOME="$(eval echo "~${SUDO_USER}")"
+  [[ -z "$EFFECTIVE_HOME" || "$EFFECTIVE_HOME" == "~${SUDO_USER}" ]] && EFFECTIVE_HOME="$HOME"
+else
+  EFFECTIVE_HOME="$HOME"
+fi
+
+# DEST_BASE nur überschreiben, wenn keine explizite Vorgabe
+if [[ -z "$DEST_BASE_ENV" ]]; then
+  DEST_BASE="$EFFECTIVE_HOME/Dokumente/Python"
+fi
 
 # ------------------------------------------------------------------------------
 # Vorbedingungen
@@ -65,6 +112,7 @@ command -v python3 >/dev/null 2>&1 || { err "python3 nicht gefunden."; exit 1; }
 log "Startordner: $START_DIR"
 log "Zielbasis:   $DEST_BASE"
 log "Wrapper:     $WRAPPER_DIR"
+(( FORCE_ROOT )) && log "$ICON_ROOT Root-Modus aktiv: Wrapper werden mit sudo nach /usr/local/bin installiert."
 (( DRY_RUN )) && log "Modus:       --dry-run (keine Änderungen)"
 
 mkdir -p "$DEST_BASE"
@@ -317,7 +365,7 @@ EOS
       fi
     fi
 
-    if [[ -w "$WRAPPER_DIR" ]]; then
+    if [[ -w "$WRAPPER_DIR" && ! $FORCE_ROOT -eq 1 ]]; then
       install -m 0755 "$TMP_WRAP" "$WRAP_PATH"
     else
       # Falls nicht schreibbar: sudo versuchen (mit/ohne TTY)
@@ -356,4 +404,11 @@ for FILE in "${DEST_PY[@]:-}"; do
 done
 log "Wrapper erstellt: $WRAPPERS"
 
+COPIED_COUNT="${COPIED:-0}"
+VENVS_COUNT="${VENVS_CREATED:-0}"
 log "Fertig."
+printf '%s Übersicht:\n' "$ICON_SUM"
+printf '  %s Modus: %s\n' "$ICON_MODE" "$([ "$DRY_RUN" -eq 1 ] && echo "Dry-Run (keine Änderungen)" || echo "Ausgeführt")"
+printf '  %s .py-Dateien kopiert: %s\n' "$ICON_PY" "$COPIED_COUNT"
+printf '  %s Neue venvs: %s\n' "$ICON_VENV" "$VENVS_COUNT"
+printf '  %s Wrapper erstellt: %s\n' "$ICON_WRAP" "$WRAPPERS"
