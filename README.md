@@ -36,18 +36,37 @@ Ein leichtgewichtiger Installer, der Python‑Module aus diesem Repository lokal
 
 ## 🔧 Installation
 
+# O) System vorberiten 
+
 ```bash
-# 1) Repo klonen (beliebiger Zielordnername, z. B. my-workspace)
-git clone https://github.com/kleiveist/PythonLinux.git my-workspace
-cd my-workspace
+apt update
+apt install curl unzip -y
+apt install -y python3-venv
 
-# 2) (Nur falls nötig) Zeilenenden auf LF umstellen, wenn CRLF-Fehler auftauchen
-#    In VS Code: unten rechts "CRLF" -> "LF" wählen und speichern
-sed -i 's/\r$//' install.sh
 
-# 3) Installer ausführbar machen und starten
-chmod +x install.sh
+curl --version
+```
+
+```bash
+cd /opt
+
+# ZIP vom GitHub-Repo laden
+curl -L -o PythonLinux.zip \
+  https://github.com/kleiveist/PythonLinux/archive/refs/heads/main.zip
+
+# entpacken
+unzip PythonLinux.zip
+
+# entstehender Ordner heißt meist PythonLinux-main → umbenennen:
+mv PythonLinux-main PythonLinux
+
 ./install.sh
+```
+
+```bash
+cd /opt/PythonLinux
+ls
+python3 install.py
 ```
 
 Voraussetzungen:
@@ -57,16 +76,6 @@ Voraussetzungen:
 - Schreibrechte für:
   - Zielbasis: Standard $HOME/Dokumente/Python
   - Wrapper-Verzeichnis: Standard /usr/local/bin (ggf. sudo nötig)
-
-Optional andere Ziele:
-```bash
-# Nur Benutzerverzeichnisse verwenden (keine sudo-Rechte nötig)
-DEST_BASE="$HOME/Apps/Python" WRAPPER_DIR="$HOME/.local/bin" ./install.sh
-
-# Bestimmten Arbeitsordner als Start definieren (z. B. externer Datenträger)
-START_DIR="/run/media/kleif/9CB3-A9F8/workspace" ./install.sh
-```
-
 ---
 
 ## 🎯 Zweck der install.sh
