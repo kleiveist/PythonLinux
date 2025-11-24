@@ -39,6 +39,8 @@ Ein leichtgewichtiger Installer, der Python‑Module aus diesem Repository lokal
 # O) System vorberiten 
 
 ```bash
+#machmal nano /etc/resolv.conf
+
 apt update
 apt install curl unzip -y
 apt install -y python3-venv
