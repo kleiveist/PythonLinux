@@ -9,6 +9,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+# ---------- Settings ----------
+# Hier können die Standardwerte für Nutzer, Mountpoint und Datenträger-Labels
+# bequem angepasst werden. Weitere Datenträger einfach in DEFAULT_LABELS ergänzen
+# oder entfernen.
+DEFAULT_USER = "kleif"
+DEFAULT_MOUNTPOINT = ""
+DEFAULT_LABELS = [
+    "T7-1TB",
+    "T7-2TB",
+]
+
 # ---------- UI/Styling ----------
 def _supports_color():
     return sys.stdout.isatty() and os.environ.get("NO_COLOR", "") == ""
@@ -257,11 +268,13 @@ def flatpak_overrides(user_media_root: Path, mountpoint: Path):
     if not which("flatpak"):
         warn("flatpak nicht gefunden – Schritt übersprungen.")
         return
-    cmds = [
-        ["flatpak", "override", "--user", f"--filesystem={str(mountpoint)}", "org.freefilesync.FreeFileSync"],
+    cmds = []
+    if mountpoint:
+        cmds.append(["flatpak", "override", "--user", f"--filesystem={str(mountpoint)}", "org.freefilesync.FreeFileSync"])
+    cmds.extend([
         ["flatpak", "override", "--user", f"--filesystem={str(user_media_root)}", "org.freefilesync.FreeFileSync"],
         ["flatpak", "override", "--user", "--filesystem=xdg-run/gvfs", "org.freefilesync.FreeFileSync"],
-    ]
+    ])
     for c in cmds:
         cmd_preview(c)
         run(c, check=False, capture=False)
@@ -298,9 +311,10 @@ def restart_ffs():
 # ---------- CLI ----------
 def parse_args():
     p = argparse.ArgumentParser(description="Fix FreeFileSync Berechtigungen mit hübscher Ausgabe")
-    p.add_argument("--user", default="kleif", help="Zielnutzer (Default: kleif)")
-    p.add_argument("--mount", default="/mnt/backup", help="Mountpunkt (Default: /mnt/backup)")
-    p.add_argument("--labels", nargs="*", default=["9CB3-A9F8", "T7"],
+    p.add_argument("--user", default=DEFAULT_USER, help=f"Zielnutzer (Default: {DEFAULT_USER})")
+    p.add_argument("--mount", default=DEFAULT_MOUNTPOINT,
+                   help=f"Mountpunkt (Default: {DEFAULT_MOUNTPOINT})")
+    p.add_argument("--labels", nargs="*", default=list(DEFAULT_LABELS),
                    help="Label‑Namen unter /run/media/<user>/…")
     return p.parse_args()
 
@@ -309,13 +323,21 @@ def main():
     user = args.user
     uid = int(run(["id", "-u", user]) or 1000)
     gid = int(run(["id", "-g", user]) or 1000)
-    mountpoint = Path(args.mount)
+    configured_mount = (args.mount or "").strip()
+    mountpoint = Path(configured_mount) if configured_mount else None
     user_media_root = Path("/run/media") / user
-    targets = [mountpoint] + [user_media_root / lbl for lbl in args.labels]
+    mountpoint_active = mountpoint
+    if mountpoint:
+        mi = get_mount_info(mountpoint)
+        if mi["FSTYPE"] == "none":
+            info(f"{mountpoint} ist nicht gemountet – dedizierter Mount wird übersprungen.")
+            mountpoint_active = None
+    targets = ([mountpoint_active] if mountpoint_active else []) + [user_media_root / lbl for lbl in args.labels]
 
     section("Umgebung")
     kv("User", f"{user} (uid={uid}, gid={gid})")
-    kv("Mountpunkt", str(mountpoint))
+    kv("Mountpunkt (config)", str(mountpoint) if mountpoint else "(leer)")
+    kv("Mount genutzt", str(mountpoint_active) if mountpoint_active else "kein dedizierter Mount")
     kv("User‑Mediapfad", str(user_media_root))
     kv("Emoji", "an" if EMOJI else "aus")
     kv("Farben", "an" if COLOR else "aus")
@@ -323,26 +345,36 @@ def main():
     test_targets(targets)
 
     section(f"Reparatur {I['hammer']}")
-    ensure_dir(mountpoint)
-    fixed = fix_permissions(mountpoint, user, uid, gid)
+    if mountpoint_active:
+        ensure_dir(mountpoint_active)
+        fix_permissions(mountpoint_active, user, uid, gid)
+    else:
+        info("Mount‑Reparatur übersprungen (kein dedizierter Mount aktiv).")
 
     section(f"Lock‑Test {I['lock']}")
-    lock = mountpoint / "sync.ffs_lock"
-    try:
-        with open(lock, "w") as f:
-            f.write("lock\n")
-        ok("Lock‑Datei kann geschrieben werden.")
-        lock.unlink(missing_ok=True)
-    except Exception as e:
-        fail(f"weiterhin kein Schreibzugriff auf {mountpoint}: {e}")
+    if mountpoint_active:
+        lock = mountpoint_active / "sync.ffs_lock"
+        try:
+            with open(lock, "w") as f:
+                f.write("lock\n")
+            ok("Lock‑Datei kann geschrieben werden.")
+            lock.unlink(missing_ok=True)
+        except Exception as e:
+            fail(f"weiterhin kein Schreibzugriff auf {mountpoint_active}: {e}")
+    else:
+        info("Lock‑Test übersprungen (kein dedizierter Mount aktiv).")
 
-    flatpak_overrides(user_media_root, mountpoint)
+    flatpak_overrides(user_media_root, mountpoint_active)
     restart_ffs()
 
     section(f"Fertig {I['spark']}")
     print("Wenn Fehlermeldungen bleiben, bitte ausgeben:")
-    print(f"  findmnt {mountpoint}")
-    print(f"  ls -ld {mountpoint}")
+    if mountpoint_active:
+        print(f"  findmnt {mountpoint_active}")
+        print(f"  ls -ld {mountpoint_active}")
+    else:
+        print("  findmnt <Mountpunkt>")
+        print("  ls -ld <Mountpunkt>")
     print("  sudo dmesg | tail -n 50")
 
 if __name__ == "__main__":

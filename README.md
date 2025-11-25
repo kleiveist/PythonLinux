@@ -40,6 +40,7 @@ Ein leichtgewichtiger Installer, der Python‑Module aus diesem Repository lokal
 
 ```bash
 #machmal nano /etc/resolv.conf
+# xxx.xxx.xxx.1 Heim IP setzen
 
 apt update
 apt install curl unzip -y
@@ -62,13 +63,13 @@ unzip PythonLinux.zip
 # entstehender Ordner heißt meist PythonLinux-main → umbenennen:
 mv PythonLinux-main PythonLinux
 
-./install.sh
+./PyInstall.sh
 ```
 
 ```bash
 cd /opt/PythonLinux
 ls
-python3 install.py
+python3 PyInstall.py
 ```
 
 Voraussetzungen:
