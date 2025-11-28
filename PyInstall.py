@@ -62,6 +62,34 @@ def err(msg: str) -> None:
     print(f"{prefix} {msg}", file=sys.stderr)
 
 
+def running_as_root() -> bool:
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def relaunch_with_sudo(argv: Sequence[str]) -> int:
+    script_path = Path(sys.argv[0]).resolve()
+    cmd = ["sudo", sys.executable, str(script_path), *argv]
+    log("Starte automatisch erneut mit sudo (Passwortabfrage möglich).")
+    log("Kommando: " + " ".join(shlex_quote(str(part)) for part in cmd))
+    try:
+        os.execvp("sudo", cmd)
+    except FileNotFoundError:
+        err("sudo nicht gefunden. Bitte Skript manuell mit sudo ausführen.")
+    except OSError as exc:
+        err(f"sudo konnte nicht gestartet werden: {exc}")
+    return 1
+
+
+def handle_permission_denied(exc: PermissionError, argv: Sequence[str]) -> int:
+    target = getattr(exc, "filename", None) or getattr(exc, "filename2", None)
+    suffix = f" für '{target}'" if target else ""
+    warn(f"Keine Schreibrechte{suffix}.")
+    if running_as_root():
+        err("Auch mit Root-Rechten fehlen Berechtigungen. Bitte Zielpfad prüfen.")
+        return 1
+    return relaunch_with_sudo(argv)
+
+
 def print_help() -> None:
     print(
         "Usage: ./install.py [--clear] [--yes|-y] [--dry-run] [--help]\n"
@@ -75,12 +103,14 @@ def print_help() -> None:
     )
 
 
-PRUNE_NAMES = {".git", "__pycache__", "venv", ".venv", ".archive"}
+PRUNE_NAMES = {".git", "__pycache__", "venv", ".venv", ".archive", ".V", ".SSH"}
 WRAP_MARKER = "# Managed by PythonLinux install.sh"
 
 
 def should_prune_dir(path: Path) -> bool:
     name = path.name
+    if name.startswith("."):
+        return True
     if name in PRUNE_NAMES or ".name" in name:
         return True
     return (path / ".name").exists()
@@ -432,6 +462,55 @@ def create_wrappers(
         report.wrapper_count = wrappers
     return wrappers
 
+
+def write_wrapper_protocol(
+    dest_py_files: Sequence[Path],
+    wrapper_paths: Sequence[Path],
+    dest_base: Path,
+    dry_run: bool,
+) -> None:
+    if dry_run:
+        log(f"[dry-run] Würde Wrapper-Protokoll schreiben nach {dest_base / '.log' / 'logs.txt'}")
+        return
+    if not wrapper_paths:
+        log("Keine Wrapper zum Protokollieren.")
+        return
+
+    log_dir = dest_base / ".log"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        warn(f"Kann Protokollordner nicht anlegen ({log_dir}): {exc}")
+        return
+
+    log_file = log_dir / "logs.txt"
+    script_map = {p.stem: p for p in dest_py_files}
+
+    lines = [
+        "Wrapper-Protokoll",
+        f"Zielbasis: {dest_base}",
+        f"Wrapper-Verzeichnis: {wrapper_paths[0].parent if wrapper_paths else 'unbekannt'}",
+        "",
+    ]
+
+    for wrapper in sorted(wrapper_paths):
+        script = script_map.get(wrapper.name) or script_map.get(wrapper.stem)
+        if script:
+            try:
+                script_rel = script.relative_to(dest_base)
+            except ValueError:
+                script_rel = script
+            mapping = f"{wrapper.name} -> {script_rel}"
+        else:
+            mapping = f"{wrapper.name} -> (keine zugehörige .py-Datei gefunden)"
+        lines.append(mapping)
+
+    try:
+        log_file.write_text("\n".join(lines) + "\n")
+        log(f"Wrapper-Protokoll geschrieben: {log_file}")
+    except OSError as exc:
+        warn(f"Konnte Wrapper-Protokoll nicht schreiben ({log_file}): {exc}")
+
 def print_summary(report: InstallReport) -> None:
     print(f"{ICON_SUMMARY} Übersicht:")
     print(f"  {ICON_MODE} Modus: {'Dry-Run (keine Änderungen)' if report.dry_run else 'Ausgeführt'}")
@@ -521,70 +600,76 @@ def main(argv: Sequence[str]) -> int:
         print_help()
         return 0
 
-    start_dir = Path(os.environ.get("START_DIR", Path.cwd()))
+    try:
+        start_dir = Path(os.environ.get("START_DIR", Path.cwd()))
 
-    if args.root:
-        base_home = Path("/root")
-    else:
-        sudo_user = os.environ.get("SUDO_USER")
-        if sudo_user:
-            try:
-                base_home = Path(pwd.getpwnam(sudo_user).pw_dir)
-            except KeyError:
-                base_home = Path.home()
+        if args.root:
+            base_home = Path("/root")
         else:
-            base_home = Path.home()
+            sudo_user = os.environ.get("SUDO_USER")
+            if sudo_user:
+                try:
+                    base_home = Path(pwd.getpwnam(sudo_user).pw_dir)
+                except KeyError:
+                    base_home = Path.home()
+            else:
+                base_home = Path.home()
 
-    dest_base_env = os.environ.get("DEST_BASE")
-    dest_base = Path(dest_base_env) if dest_base_env else base_home / "Dokumente/Python"
+        dest_base_env = os.environ.get("DEST_BASE")
+        dest_base = Path(dest_base_env) if dest_base_env else base_home / "Dokumente/Python"
 
-    wrapper_dir = Path("/usr/local/bin") if args.root else Path(os.environ.get("WRAPPER_DIR", "/usr/local/bin"))
+        wrapper_dir = Path("/usr/local/bin") if args.root else Path(os.environ.get("WRAPPER_DIR", "/usr/local/bin"))
 
-    log(f"Startordner: {start_dir}")
-    log(f"Zielbasis:   {dest_base}")
-    log(f"Wrapper:     {wrapper_dir}")
-    if args.root:
-        log(f"{ICON_ROOT} Root-Modus aktiv: Wrapper werden mit sudo nach /usr/local/bin installiert.")
-    if args.dry_run:
-        log("Modus:       --dry-run (keine Änderungen)")
+        log(f"Startordner: {start_dir}")
+        log(f"Zielbasis:   {dest_base}")
+        log(f"Wrapper:     {wrapper_dir}")
+        if args.root:
+            log(f"{ICON_ROOT} Root-Modus aktiv: Wrapper werden mit sudo nach /usr/local/bin installiert.")
+        if args.dry_run:
+            log("Modus:       --dry-run (keine Änderungen)")
 
-    dest_base.mkdir(parents=True, exist_ok=True)
+        dest_base.mkdir(parents=True, exist_ok=True)
 
-    # Neuer Report für die Zusammenfassung
-    report = InstallReport(dry_run=args.dry_run, start_dir=start_dir, dest_base=dest_base)
+        # Neuer Report für die Zusammenfassung
+        report = InstallReport(dry_run=args.dry_run, start_dir=start_dir, dest_base=dest_base)
 
-    if args.clear:
-        clear_install(dest_base, wrapper_dir, args.dry_run, args.yes)
+        if args.clear:
+            clear_install(dest_base, wrapper_dir, args.dry_run, args.yes)
 
-    log("Suche nach .py-Dateien ...")
-    py_files = collect_files(start_dir, "*.py")
-    if py_files:
-        log(f"Gefundene .py-Dateien: {len(py_files)}")
-    else:
-        warn("Keine .py-Dateien gefunden (nach Ausschlüssen).")
+        log("Suche nach .py-Dateien ...")
+        py_files = collect_files(start_dir, "*.py")
+        if py_files:
+            log(f"Gefundene .py-Dateien: {len(py_files)}")
+        else:
+            warn("Keine .py-Dateien gefunden (nach Ausschlüssen).")
 
-    # Füllt report.copied_files und report.installed_dirs
-    copy_py_files(py_files, start_dir, dest_base, args.dry_run, report)
+        # Füllt report.copied_files und report.installed_dirs
+        copy_py_files(py_files, start_dir, dest_base, args.dry_run, report)
 
-    log("Suche nach venv.txt ...")
-    venv_txt_files = collect_files(start_dir, "venv.txt")
-    if venv_txt_files:
-        log(f"Gefundene venv.txt-Dateien: {len(venv_txt_files)}")
-    else:
-        log("Keine venv.txt gefunden. Überspringe venv-Erstellung.")
+        log("Suche nach venv.txt ...")
+        venv_txt_files = collect_files(start_dir, "venv.txt")
+        if venv_txt_files:
+            log(f"Gefundene venv.txt-Dateien: {len(venv_txt_files)}")
+        else:
+            log("Keine venv.txt gefunden. Überspringe venv-Erstellung.")
 
-    # Füllt report.venv_reports und report.venv_created_count
-    handle_venvs(venv_txt_files, start_dir, dest_base, args.dry_run, report)
+        # Füllt report.venv_reports und report.venv_created_count
+        handle_venvs(venv_txt_files, start_dir, dest_base, args.dry_run, report)
 
-    log("Erzeuge Wrapper ...")
-    dest_py_files = find_dest_py_files(dest_base)
+        log("Erzeuge Wrapper ...")
+        dest_py_files = find_dest_py_files(dest_base)
 
-    # Füllt report.wrapper_paths und report.wrapper_count
-    create_wrappers(dest_py_files, wrapper_dir, args.dry_run, args.root, report)
+        # Füllt report.wrapper_paths und report.wrapper_count
+        create_wrappers(dest_py_files, wrapper_dir, args.dry_run, args.root, report)
 
-    log("Fertig.")
-    print_summary(report)
-    return 0
+        # Protokoll der erzeugten Wrapper schreiben
+        write_wrapper_protocol(dest_py_files, report.wrapper_paths, dest_base, args.dry_run)
+
+        log("Fertig.")
+        print_summary(report)
+        return 0
+    except PermissionError as exc:
+        return handle_permission_denied(exc, argv)
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
