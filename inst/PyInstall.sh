@@ -384,8 +384,39 @@ EOS
   log "Wrapper installiert: $WRAP_PATH"
 }
 
+write_wrapper_log() {
+  local LOG_DIR="$DEST_BASE/.log"
+  local LOG_FILE="$LOG_DIR/logs.txt"
+
+  if (( DRY_RUN )); then
+    log "[dry-run] Würde Wrapper-Protokoll schreiben nach $LOG_FILE"
+    return
+  fi
+
+  if (( ${#WRAPPER_LINES[@]} == 0 )); then
+    log "Keine Wrapper zum Protokollieren."
+    return
+  fi
+
+  if ! mkdir -p "$LOG_DIR" 2>/dev/null; then
+    warn "Kann Protokollordner nicht anlegen: $LOG_DIR"
+    return
+  fi
+
+  {
+    echo "Wrapper-Protokoll"
+    echo "Zielbasis: $DEST_BASE"
+    echo "Wrapper-Verzeichnis: $WRAPPER_DIR"
+    echo
+    printf '%s\n' "${WRAPPER_LINES[@]}"
+  } >"$LOG_FILE" || { warn "Konnte Wrapper-Protokoll nicht schreiben: $LOG_FILE"; return; }
+
+  log "Wrapper-Protokoll geschrieben: $LOG_FILE"
+}
+
 log "Erzeuge Wrapper ..."
 WRAPPERS=0
+WRAPPER_LINES=()
 # Ziel-.py-Dateien (nicht in .venv/venv/__pycache__)
 mapfile -t DEST_PY < <(
   find "$DEST_BASE" \
@@ -398,11 +429,15 @@ for FILE in "${DEST_PY[@]:-}"; do
   # Hinweis: Kollisionen (gleicher Name aus verschiedenen Pfaden) sind möglich
   if create_wrapper "$FILE" "$NAME"; then
     ((WRAPPERS++)) || true
+    REL="${FILE#"$DEST_BASE"/}"
+    [[ "$REL" == "$FILE" ]] && REL="$FILE"
+    WRAPPER_LINES+=( "$NAME -> $REL" )
   else
     warn "Wrapper für '$FILE' konnte nicht erstellt werden."
   fi
 done
 log "Wrapper erstellt: $WRAPPERS"
+write_wrapper_log
 
 COPIED_COUNT="${COPIED:-0}"
 VENVS_COUNT="${VENVS_CREATED:-0}"
