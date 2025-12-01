@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import argparse, os, re, tempfile
+import argparse, re, tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -43,6 +43,20 @@ def parse_args():
     grp.add_argument("--45", dest="mode", action="store_const", const="45", help="45-Punkte-Schema verwenden")
     grp.add_argument("--90", dest="mode", action="store_const", const="90", help="90-Punkte-Schema verwenden (Default)")
     parser.set_defaults(mode="90")
+
+    parser.add_argument(
+        "--backup", "-b",
+        action="store_true",
+        help="Vor Änderungen eine .bak-Datei neben dem Original anlegen"
+    )
+
+    # NEU: optionaler Pfad (Datei oder Ordner)
+    parser.add_argument(
+        "path",
+        nargs="?",
+        help="Ordner oder Datei; Standard: aktuelles Arbeitsverzeichnis"
+    )
+
     return parser.parse_args()
 
 # ===== Bewertung =====
@@ -137,7 +151,7 @@ def atomic_write(path:Path, data:str):
     tmp_path.replace(path)
 
 # ===== Datei-Verarbeitung =====
-def process_file(path:Path, session_dir:Path, base_dir:Path, cfg:ExamConfig):
+def process_file(path:Path, do_backup:bool, cfg:ExamConfig):
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
 
@@ -180,8 +194,10 @@ def process_file(path:Path, session_dir:Path, base_dir:Path, cfg:ExamConfig):
     changed = (new_text != text)
 
     if changed:
-        # Backup in Session-Ordner schreiben, dann Original aktualisieren
-        write_backup(path, session_dir, base_dir)
+        # Optional: Original als .bak sichern, dann Überschreiben
+        if do_backup:
+            bak_path = path.with_suffix(path.suffix + ".bak")
+            atomic_write(bak_path, text)
         atomic_write(path, new_text)
 
     # Konsole
@@ -198,26 +214,42 @@ def main():
     args = parse_args()
     cfg = CONFIGS.get(args.mode, CONFIGS["90"])
 
-    # Im Skriptordner arbeiten
-    script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-    os.chdir(script_dir)
+    # Ziel bestimmen
+    if args.path:
+        target = Path(args.path).expanduser()
+        if target.is_dir():
+            work_dir = target          # Ordner direkt verwenden
+            single_file = None
+        else:
+            work_dir = target.parent   # Ordner der Datei
+            single_file = target
+    else:
+        work_dir = Path.cwd()
+        single_file = None
 
-    # Backup-Struktur anlegen und Session-Verzeichnis bestimmen
-    backup_root = ensure_dirs(script_dir)
-    session_dir = get_or_create_session_dir(backup_root)
-
-    # Nur .md im selben Ordner
-    md_files = [p for p in sorted(script_dir.iterdir()) if p.is_file() and p.suffix.lower()==".md"]
+    # .md-Dateien auswählen
+    if single_file is not None:
+        md_files = [single_file]
+    else:
+        md_files = [
+            p for p in sorted(work_dir.iterdir())
+            if p.is_file() and p.suffix.lower() == ".md"
+        ]
 
     changed = 0
     for p in md_files:
         try:
-            if process_file(p, session_dir, script_dir, cfg): changed += 1
+            if process_file(p, args.backup, cfg):   # process_file wie in meiner letzten Antwort angepasst
+                changed += 1
         except Exception as e:
             print(f"❌ Fehler in {p}: {e}")
 
     print(f"{I_SUM}  Zusammenfassung: geändert: {changed} / gesamt: {len(md_files)}")
-    print(f"     Backups: {session_dir}")
+    if args.backup:
+        print("     Backup: .bak-Dateien wurden angelegt")
+    else:
+        print("     Backup: deaktiviert (Dateien direkt überschrieben)")
+    print(f"     Arbeitsordner: {work_dir}")
     print(f"     Schema: {args.mode}-Punkte ({cfg.max_points} max)")
 
 if __name__ == "__main__":
