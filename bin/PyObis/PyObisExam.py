@@ -214,32 +214,20 @@ def main():
     args = parse_args()
     cfg = CONFIGS.get(args.mode, CONFIGS["90"])
 
-    # Ziel bestimmen
-    if args.path:
-        target = Path(args.path).expanduser()
-        if target.is_dir():
-            work_dir = target          # Ordner direkt verwenden
-            single_file = None
-        else:
-            work_dir = target.parent   # Ordner der Datei
-            single_file = target
-    else:
-        work_dir = Path.cwd()
-        single_file = None
+    # Da arbeiten, wo der Prozess gestartet wird
+    work_dir = Path.cwd()
 
-    # .md-Dateien auswählen
-    if single_file is not None:
-        md_files = [single_file]
-    else:
-        md_files = [
-            p for p in sorted(work_dir.iterdir())
-            if p.is_file() and p.suffix.lower() == ".md"
-        ]
+    # .md-Dateien im Arbeitsordner einsammeln
+    md_files = [
+        p for p in sorted(work_dir.iterdir())
+        if p.is_file() and p.suffix.lower() == ".md"
+    ]
 
     changed = 0
     for p in md_files:
         try:
-            if process_file(p, args.backup, cfg):   # process_file wie in meiner letzten Antwort angepasst
+            # process_file(path, do_backup: bool, cfg)
+            if process_file(p, args.backup, cfg):
                 changed += 1
         except Exception as e:
             print(f"❌ Fehler in {p}: {e}")
@@ -251,6 +239,7 @@ def main():
         print("     Backup: deaktiviert (Dateien direkt überschrieben)")
     print(f"     Arbeitsordner: {work_dir}")
     print(f"     Schema: {args.mode}-Punkte ({cfg.max_points} max)")
+
 
 if __name__ == "__main__":
     main()
